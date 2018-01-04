@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+
 """ bot.py
     Author: Jim Craveiro <jim.craveiro@gmail.com>
     Date: 1/03/2018
@@ -11,9 +12,18 @@ import time
 import json
 import signal
 import logging
+import requests
 import pusherclient
 
-PUSHER_KEY = 'de504dc5763aeef9ff52'
+CREDENTIALS         = {}
+BITSTAMP_PUSHER_KEY = 'de504dc5763aeef9ff52'
+PUSHOVER_URL        = 'https://api.pushover.net/1/messages.json'
+PUSHOVER_RETRIES    = 2
+PUSHOVER_PRIORITY   = {'silent'   :'-2',
+                       'low'      :'-1',
+                       'default'  : '0',
+                       'high'     : '1',
+                       'emergency': '2'}
 
 """ Client
     class used to control websocket/pusher connection to bitstamp
@@ -22,17 +32,15 @@ class Client():
 
     """ __init__
         init function sets up the connection to bitstamp
-        params:
-            logger (object) - from logging library
     """
-    def __init__(self, logger):
+    def __init__(self):
         self.last_trade = '{"price_str":"0"}';
-        self.logger = logger
-        self.client = pusherclient.Pusher(PUSHER_KEY)
+        self.logger = logging.getLogger('trades')
+        self.client = pusherclient.Pusher(BITSTAMP_PUSHER_KEY)
         self.client.connection.bind('pusher:connection_established', self.on_connect)
         self.client.connect()
 
-    """ subscription
+    """ subscribe
         channel subscription function for pusher
         params:
             channel (string) - name of channel to subscribe to
@@ -69,10 +77,57 @@ class Client():
 
     """ cur_price
         parses the last (most recent) trade and returns the price string
+        returns:
+            (string) - price of the most recent trade
     """
     def cur_price(self):
         data = json.loads(self.last_trade)
         return data['price_str']
+
+""" push_notification
+    function that sends a push notification using the Pushover API, requests,
+    and credentials provided in the credentials.json file. 
+    Pushover documentation can be found here: https://pushover.net/api
+    params:
+        message (string) - the push notification message body
+        title (string) - the title of the push notification,
+                         defaults to empty string which lets Pushover use its default
+        priority (string) - priority string that corresponds to Pushover priority levels
+                            using PUSHOVER_PRIORITY to convert, defaults to 'default'
+        retries (int) - the number of retries (total attempts - 1) to attempt if the post
+                        request to the Pushover API fails, defaults to PUSHOVER_RETRIES constant
+"""
+def push_notification(message, title='', priority='default', retries=PUSHOVER_RETRIES):
+    payload = {
+        'token'   : CREDENTIALS['pushover']['token'],
+        'user'    : CREDENTIALS['pushover']['user'],
+        'message' : message,
+        'title'   : title,
+        'priority': PUSHOVER_PRIORITY[priority]
+    }
+    if(priority == 'emergency'):
+        payload['retry']  = 120
+        payload['expire'] = 600
+    
+    response = requests.post(PUSHOVER_URL, data=payload)
+    if(response.status_code >= 400):
+        try_fraction = str((retries - 3) * -1) + '/' + str(PUSHOVER_RETRIES + 1)
+        logging.getLogger('errors').error('push notification failed on try ' + try_fraction +
+                                          ' with status code: ' + str(response.status_code) +
+                                          '\n    error text: ' + response.text + '\n')
+        if(retries > 0): 
+            time.sleep(1)
+            push_notification(message, title, priority, retries-1)
+
+""" make_logger
+    function that creates a very basic logger that appends to a file
+    params:
+        name (string) - name of the logger
+"""
+def make_logger(name):
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.INFO)
+    logger.addHandler(logging.FileHandler(name + '.log', mode='a'))
 
 """ on_sigint
     signal handler for sigint; exits program
@@ -85,22 +140,25 @@ def on_sigint(signum, frame):
     sys.exit()
 
 """ init
-    function that sets up the signal handler for sigint and sets up, then returns, the logger
+    function that sets up the signal handler for sigint, 
+    reads in credentials, then sets up loggers
 """
 def init():
     signal.signal(signal.SIGINT, on_sigint)
     
-    logger = logging.getLogger('trade_log')
-    logger.setLevel(logging.INFO)
-    logger.addHandler(logging.FileHandler('trades.log', mode='a'))
-    return logger
+    global CREDENTIALS
+    with open('credentials.json', 'r') as file:
+        CREDENTIALS = json.loads(file.read())
+    
+    make_logger('errors')
+    make_logger('trades')
 
 """ main
     function where main loop is held, calls init and creates the client
 """
 def main():
-    logger = init()
-    client = Client(logger)
+    init()
+    client = Client()
     
     while True:    
         sys.stdout.write('\rCurrent Price: ' + client.cur_price())
