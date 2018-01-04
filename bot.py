@@ -24,6 +24,8 @@ PUSHOVER_PRIORITY   = {'silent'   :'-2',
                        'default'  : '0',
                        'high'     : '1',
                        'emergency': '2'}
+PUSHOVER_EMERGENCY_RETRY  = 120
+PUSHOVER_EMERGENCY_EXPIRE = 600
 
 """ Client
     class used to control websocket/pusher connection to bitstamp
@@ -106,8 +108,8 @@ def push_notification(message, title='', priority='default', retries=PUSHOVER_RE
         'priority': PUSHOVER_PRIORITY[priority]
     }
     if(priority == 'emergency'):
-        payload['retry']  = 120
-        payload['expire'] = 600
+        payload['retry']  = PUSHOVER_EMERGENCY_RETRY
+        payload['expire'] = PUSHOVER_EMERGENCY_EXPIRE
     
     response = requests.post(PUSHOVER_URL, data=payload)
     if(response.status_code >= 400):
