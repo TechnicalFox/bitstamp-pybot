@@ -4,6 +4,9 @@ credentials.json
 # Swap files
 *.swp
 
+# Log directory
+log/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

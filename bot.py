@@ -5,9 +5,10 @@
     Author: Jim Craveiro <jim.craveiro@gmail.com>
     Date: 1/03/2018
 
-    Python 3 Bitstamp trading bot.
+    Python 3 Bitstamp trading bot
 """
 
+import os
 import sys
 import time
 import json
@@ -15,14 +16,13 @@ import signal
 import curses
 import logging
 import requests
-import threading
-import pusherclient
+from src.client import Client
+from src.recent_trades import RecentTrades
 
+LOG_PATH            = './log/'
 ONE_HOUR            = 3600
 FIFTEEN_MIN         = 900
-CLEANUP_INTERVAL    = 30
 CREDENTIALS         = {}
-BITSTAMP_PUSHER_KEY = 'de504dc5763aeef9ff52'
 PUSHOVER_URL        = 'https://api.pushover.net/1/messages.json'
 PUSHOVER_RETRIES    = 2
 PUSHOVER_PRIORITY   = {'silent'   :'-2',
@@ -33,153 +33,6 @@ PUSHOVER_PRIORITY   = {'silent'   :'-2',
 PUSHOVER_EMERGENCY_RETRY  = 120
 PUSHOVER_EMERGENCY_EXPIRE = 600
 
-"""
-    class used as an in-memory container for recent trades
-"""
-class RecentTrades():
-    #TODO: comment this class and its functions
-    def __init__(self):
-        self.new_trade = False
-        self.price_string  = '0'
-        self.recent_trades = {}
-        
-        cleanup_thread = threading.Thread(target=self.remove_old_trades)
-        cleanup_thread.daemon = True
-        cleanup_thread.start()
-        
-    def add_tracker(self, name, age):
-        self.recent_trades[name] = {
-            'age':           age,
-            'trades':         [],
-            'volume':        0.0,
-            'price_volume':  0.0,
-            'average_price': 0.0
-        }
-    
-    def price(self):
-        return self.price_string
-    
-    def age(self, name):
-        return self.recent_trades[name]['age']
-   
-    def trackers(self):
-        return [key for key in self.recent_trades]
-     
-    def trades(self, name, trades=None, append=False):
-        if trades == None:
-            return self.recent_trades[name]['trades']
-        else:
-            if append:
-                self.recent_trades[name]['trades'].append(trades)
-            else:
-                self.recent_trades[name]['trades'] = trades
-        
-    def volume(self, name, volume=None):
-        if volume == None:
-            return self.recent_trades[name]['volume']
-        else:
-            self.recent_trades[name]['volume'] = volume
-    
-    def price_volume(self, name, volume=None):
-        if volume == None:
-            return self.recent_trades[name]['price_volume']
-        else:
-            self.recent_trades[name]['price_volume'] = volume
-    
-    def average_price(self, name, price=None):
-        if price == None:
-            return self.recent_trades[name]['average_price']
-        else:
-            self.recent_trades[name]['average_price'] = price
-    
-    def remove_old_trades(self):
-        while True:
-            cur_time = time.time()
-            for tracker in self.trackers():
-                self.trades(tracker,
-                    [trade for trade in self.trades(tracker) if int(trade['timestamp']) > cur_time - self.age(tracker)]
-                )
-            logging.getLogger('debug').debug('removing old trades')
-            time.sleep(CLEANUP_INTERVAL)
-    
-    def run_calculations(self):
-        if self.new_trade:
-            for tracker in self.trackers():
-                temp_volume    = 0.0
-                temp_price_vol = 0.0
-                temp_avg_price = 0.0
-                temp_avg_count = 0
-                for trade in self.trades(tracker):
-                    temp_volume    += trade['amount']
-                    temp_price_vol += trade['amount'] * trade['price']
-                    temp_avg_price += trade['price']
-                    temp_avg_count += 1
-                
-                temp_avg_price /= temp_avg_count
-                self.volume(tracker, temp_volume)
-                self.price_volume(tracker, temp_price_vol)
-                self.average_price(tracker, temp_avg_price)
-                self.new_trade = False
-    
-    def store_trade(self, trade):
-        self.new_trade = True
-        self.price_string = trade['price_str']
-        for tracker in self.trackers():
-            self.trades(tracker, trade, True)
-
-"""
-    class used to control connection to bitstamp/pusher
-"""
-class Client():
-
-    """
-        init function sets up the connection to bitstamp/pusher
-    """
-    def __init__(self, recent_trades):
-        self.recent_trades = recent_trades
-        self.logger = logging.getLogger('trades')
-        self.client = pusherclient.Pusher(BITSTAMP_PUSHER_KEY)
-        self.client.connection.bind('pusher:connection_established', self.on_connect)
-        self.client.connect()
-
-    """
-        channel subscription function for pusher
-        params:
-            channel (string) - name of channel to subscribe to
-            events (list) - list of events and callbacks formatted like so:
-                [{'event':'event_name','callback':callback_name}]
-                event_name (string) - name of the event to listen for
-                callback_name (function) - function to call when event triggered
-    """
-    def subscribe(self, channel, events):
-        subscription = self.client.subscribe(channel)
-        for item in events:
-            subscription.bind(item['event'], item['callback'])
-    
-    """
-        callback function that is called when connected to bitstamp/pusher
-        params:
-            data (json string) [unused] - contains socket id of connection
-    """
-    def on_connect(self, data):
-        self.subscribe('live_trades_xrpusd', [
-            { 'event': 'trade',
-              'callback': self.on_trade }
-        ])
-    
-    """
-        callback function that is called when a trade event is fired
-        sets the current price, as well as storing trades and calculating the trade volume
-        params:
-            data (json string) - contains information on the trade that was executed,
-                bitstamp's api docs can be found here: https://www.bitstamp.net/websocket/
-    """
-    #TODO: update comments here
-    def on_trade(self, data):
-        self.logger.info(data)
-        cur_trade = json.loads(data)
-        self.recent_trades.store_trade(cur_trade)
-        
 """
     function that sends a push notification using the Pushover API, requests,
     and credentials provided in the credentials.json file. 
@@ -222,7 +75,7 @@ def push_notification(message, title='', priority='default', retries=PUSHOVER_RE
 def make_logger(name):
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
-    logger.addHandler(logging.FileHandler('{}.log'.format(name), mode='a'))
+    logger.addHandler(logging.FileHandler('{}{}.log'.format(LOG_PATH, name), mode='a'))
 
 """
     function that calculates the uptime of the program and returns an uptime string
@@ -277,6 +130,7 @@ def init():
     with open('credentials.json', 'r') as file:
         CREDENTIALS = json.loads(file.read())
     
+    if not os.path.exists(LOG_PATH): os.mkdir(LOG_PATH)
     make_logger('debug')
     make_logger('trades')
     
