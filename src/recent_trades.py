@@ -78,7 +78,7 @@ class RecentTrades():
                 self.trades(tracker,
                     [trade for trade in self.trades(tracker) if int(trade['timestamp']) > cur_time - self.age(tracker)]
                 )
-                if len(self.trades(tracker)) > num_trades: self.new_trade = True
+                if len(self.trades(tracker)) < num_trades: self.new_trade = True
             time.sleep(CLEANUP_INTERVAL)
 
     def run_calculations(self):
