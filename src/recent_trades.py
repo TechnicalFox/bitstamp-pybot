@@ -18,6 +18,7 @@ class RecentTrades():
     #TODO: comment this class and its functions
     def __init__(self):
         self.new_trade = False
+        self.initial_value = False
         self.price_string  = '0'
         self.recent_trades = {}
 
@@ -76,8 +77,8 @@ class RecentTrades():
             for tracker in self.trackers():
                 num_trades = len(self.trades(tracker))
                 self.trades(tracker,
-                    [trade for trade in self.trades(tracker) if int(trade['timestamp']) > cur_time - self.age(tracker)]
-                )
+                    [trade for trade in self.trades(tracker)
+                        if int(trade['timestamp']) > cur_time - self.age(tracker)])
                 if len(self.trades(tracker)) < num_trades: self.new_trade = True
             time.sleep(CLEANUP_INTERVAL)
 
@@ -101,6 +102,7 @@ class RecentTrades():
                 self.new_trade = False
 
     def store_trade(self, trade):
+        self.initial_value = True
         self.new_trade = True
         self.price_string = trade['price_str']
         for tracker in self.trackers():

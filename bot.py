@@ -23,15 +23,15 @@ LOG_PATH            = './log/'
 ONE_HOUR            = 3600
 FIFTEEN_MIN         = 900
 CREDENTIALS         = {}
+RETRY_INTERVAL      = 30
 PUSHOVER_URL        = 'https://api.pushover.net/1/messages.json'
-PUSHOVER_RETRIES    = 2
+PUSHOVER_RETRIES    = 5
 PUSHOVER_PRIORITY   = {'silent'   :'-2',
                        'low'      :'-1',
                        'default'  : '0',
                        'high'     : '1',
                        'emergency': '2'}
-PUSHOVER_EMERGENCY_RETRY  = 120
-PUSHOVER_EMERGENCY_EXPIRE = 600
+PUSHOVER_ERROR = 'push notification failed on try {}/{} with status code: {}\n    error text: {}\n'
 
 """
     function that sends a push notification using the Pushover API, requests,
@@ -43,8 +43,8 @@ PUSHOVER_EMERGENCY_EXPIRE = 600
                          defaults to empty string which lets Pushover use its default
         priority (string) - priority string that corresponds to Pushover priority levels
                             using PUSHOVER_PRIORITY to convert, defaults to 'default'
-        retries (int) - the number of retries (total attempts - 1) to attempt if the post
-                        request to the Pushover API fails, defaults to PUSHOVER_RETRIES constant
+        retries (int) - the number of retries to attempt if the post request to the 
+                        Pushover API fails, defaults to PUSHOVER_RETRIES constant
 """
 def push_notification(message, title='', priority='default', retries=PUSHOVER_RETRIES):
     payload = {
@@ -54,17 +54,14 @@ def push_notification(message, title='', priority='default', retries=PUSHOVER_RE
         'title'   : title,
         'priority': PUSHOVER_PRIORITY[priority]
     }
-    if priority == 'emergency':
-        payload['retry']  = PUSHOVER_EMERGENCY_RETRY
-        payload['expire'] = PUSHOVER_EMERGENCY_EXPIRE
     
     response = requests.post(PUSHOVER_URL, data=payload)
     if response.status_code >= 400:
-        logging.getLogger('debug').error('push notification failed on try {}/{} with status code: {}\n    error text: {}\n'.format(
-            (retries - 3) * -1, PUSHOVER_RETRIES + 1, response.status_code, response.text
-        ))
-        if retries > 0: 
-            time.sleep(1)
+        logging.getLogger('debug').error(PUSHOVER_ERROR.format(
+            (retries - PUSHOVER_RETRIES + 1), PUSHOVER_RETRIES, 
+            response.status_code, response.text))
+        if retries > 1: 
+            time.sleep(RETRY_INTERVAL)
             push_notification(message, title, priority, retries-1)
 
 """
@@ -75,14 +72,16 @@ def push_notification(message, title='', priority='default', retries=PUSHOVER_RE
 def make_logger(name):
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
-    logger.addHandler(logging.FileHandler('{}{}.log'.format(LOG_PATH, name), mode='a'))
+    logger.addHandler(logging.FileHandler('{}{}.log'.format(
+        LOG_PATH, name), mode='a'))
 
 """
     function that calculates the uptime of the program and returns an uptime string
     params:
         start_time (float) - time recorded at start of program
     return:
-        (string) - string containing calculated days, hours, minutes, and seconds of uptime
+        (string) - string containing calculated days, hours, minutes, 
+                   and seconds of uptime
 """
 def calc_uptime(start_time):
     seconds = int(time.time() - start_time)
@@ -99,7 +98,8 @@ def calc_uptime(start_time):
 """
     signal handler for sigint; exits program
     params:
-        signum (int) [unused] - number representing the signal being passed to handler
+        signum (int) [unused] - number representing the signal being 
+                                passed to handler
         frame (object) [unused] - stack frame interrupted by signal
 """
 def on_sigint(signum, frame):
@@ -107,15 +107,30 @@ def on_sigint(signum, frame):
 
 def update_display(stdscr, recent_trades, start_time):
     cursor_pos = 0
-    stdscr.addstr(cursor_pos, 0, 'Bitstamp Pybot - uptime: {}'.format(calc_uptime(start_time))); cursor_pos+=2
-    stdscr.addstr(cursor_pos, 0, 'Current Price: ${} USD'.format(recent_trades.price())); cursor_pos+=2
+    stdscr.addstr(cursor_pos, 0, 'Bitstamp Pybot - uptime: {}'.format(
+        calc_uptime(start_time)))
+    cursor_pos += 2
+    stdscr.addstr(cursor_pos, 0, 'Current Price: ${} USD'.format(
+        recent_trades.price()))
+    cursor_pos += 2
     
     for tracker in recent_trades.trackers():
-        stdscr.addstr(cursor_pos, 0, '{} Trade Volume:  {:.8f} XRP'.format(tracker, recent_trades.volume(tracker))); cursor_pos+=1
-        stdscr.addstr(cursor_pos, 4, 'Price Volume:    ${:.5f} USD'.format(recent_trades.price_volume(tracker))); cursor_pos+=1
-        stdscr.addstr(cursor_pos, 4, 'Average Price:   ${:.5f} USD'.format(recent_trades.average_price(tracker))); cursor_pos+=2
+        stdscr.addstr(cursor_pos, 0, '{} Trade Volume:  {:.8f} XRP'.format(
+            tracker, recent_trades.volume(tracker)))
+        cursor_pos += 1
+        stdscr.addstr(cursor_pos, 4, 'Price Volume:    ${:.5f} USD'.format(
+            recent_trades.price_volume(tracker)))
+        cursor_pos += 1
+        stdscr.addstr(cursor_pos, 4, 'Average Price:   ${:.5f} USD'.format(
+            recent_trades.average_price(tracker)))
+        cursor_pos += 2
     
     stdscr.refresh()
+
+def read_credentials():
+    global CREDENTIALS
+    with open('credentials.json', 'r') as file:
+        CREDENTIALS = json.loads(file.read())
 
 """
     function that sets up the signal handler for sigint, 
@@ -125,10 +140,7 @@ def update_display(stdscr, recent_trades, start_time):
 def init():
     curses.curs_set(0)
     signal.signal(signal.SIGINT, on_sigint)
-    
-    global CREDENTIALS
-    with open('credentials.json', 'r') as file:
-        CREDENTIALS = json.loads(file.read())
+    read_credentials()
     
     if not os.path.exists(LOG_PATH): os.mkdir(LOG_PATH)
     make_logger('debug')
@@ -147,10 +159,17 @@ def main(stdscr):
     start_time = time.time()
     recent_trades = init()
     client = Client(recent_trades)
+    start_notification = False
     
     while True:
         recent_trades.run_calculations()
         update_display(stdscr, recent_trades, start_time)
+        
+        if start_notification and recent_trades.initial_value:
+            push_notification('Start time: {}\nPrice: {}'.format(
+                time.strftime('%m/%d/%y - %I:%M %p', time.localtime(start_time)), 
+                recent_trades.price_string), 'Bot Started')
+        
         time.sleep(1)
 
 if __name__ == '__main__': curses.wrapper(main)
