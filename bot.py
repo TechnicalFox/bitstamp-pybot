@@ -3,7 +3,7 @@
 """
     Filename: bot.py
     Author: Jim Craveiro <jim.craveiro@gmail.com>
-    Date: 1/03/2018
+    Date: 03/07/2019
 
     Python 3 Bitstamp trading bot
 """
@@ -38,13 +38,15 @@ PUSHOVER_ERROR = 'push notification failed on try {}/{} with status code: {}\n  
     and credentials provided in the credentials.json file. 
     Pushover documentation can be found here: https://pushover.net/api
     params:
-        message (string) - the push notification message body
-        title (string) - the title of the push notification,
-                         defaults to empty string which lets Pushover use its default
-        priority (string) - priority string that corresponds to Pushover priority levels
-                            using PUSHOVER_PRIORITY to convert, defaults to 'default'
+        message (str) - the push notification message body
+        title (str) - the title of the push notification,
+                      defaults to empty string which lets Pushover use its default
+        priority (str) - priority string that corresponds to Pushover priority levels
+                         using PUSHOVER_PRIORITY to convert, defaults to 'default'
         retries (int) - the number of retries to attempt if the post request to the 
                         Pushover API fails, defaults to PUSHOVER_RETRIES constant
+    returns:
+        NoneType
 """
 def push_notification(message, title='', priority='default', retries=PUSHOVER_RETRIES):
     payload = {
@@ -58,16 +60,18 @@ def push_notification(message, title='', priority='default', retries=PUSHOVER_RE
     response = requests.post(PUSHOVER_URL, data=payload)
     if response.status_code >= 400:
         logging.getLogger('debug').error(PUSHOVER_ERROR.format(
-            (retries - PUSHOVER_RETRIES + 1), PUSHOVER_RETRIES, 
+            (PUSHOVER_RETRIES - retries + 1), PUSHOVER_RETRIES, 
             response.status_code, response.text))
         if retries > 1: 
             time.sleep(RETRY_INTERVAL)
-            push_notification(message, title, priority, retries-1)
+            push_notification(message, title, priority, retries - 1)
 
 """
     function that creates a very basic logger that appends to a file
     params:
-        name (string) - name of the logger
+        name (str) - name of the logger
+    returns:
+        NoneType
 """
 def make_logger(name):
     logger = logging.getLogger(name)
@@ -79,9 +83,9 @@ def make_logger(name):
     function that calculates the uptime of the program and returns an uptime string
     params:
         start_time (float) - time recorded at start of program
-    return:
-        (string) - string containing calculated days, hours, minutes, 
-                   and seconds of uptime
+    returns:
+        (str) - string containing calculated days, hours, minutes, 
+                and seconds of uptime
 """
 def calc_uptime(start_time):
     seconds = int(time.time() - start_time)
@@ -101,10 +105,21 @@ def calc_uptime(start_time):
         signum (int) [unused] - number representing the signal being 
                                 passed to handler
         frame (object) [unused] - stack frame interrupted by signal
+    returns:
+        NoneType
 """
 def on_sigint(signum, frame):
     sys.exit()
 
+"""
+    function that updates the curses display with most recent data
+    params:
+        stdscr (Window) - curses screen to add text to
+        recent_trades (RecentTrades) - in memory container of recent trades
+        start_time (float) - time that program was initialized
+    returns:
+        NoneType
+"""
 def update_display(stdscr, recent_trades, start_time):
     cursor_pos = 0
     stdscr.addstr(cursor_pos, 0, 'Bitstamp Pybot - uptime: {}'.format(
@@ -127,6 +142,26 @@ def update_display(stdscr, recent_trades, start_time):
     
     stdscr.refresh()
 
+"""
+    function to read in credentials from a json file for bitstamp & pushover
+    and put it in a global dict
+    format:
+        {
+          "bitstamp":{
+            "key":"<BITSTAMP_API_KEY>",
+            "secret":"<BITSTAMP_API_SECRET>",
+            "pusher":"<BITSTAMP_WEBSOCKET_KEY>"
+          },
+          "pushover":{
+            "token":"<PUSHOVER_API_TOKEN>",
+            "user":"<PUSHOVER_APU_USER>"
+          }
+        }
+    params:
+        None
+    returns:
+        NoneType
+"""
 def read_credentials():
     global CREDENTIALS
     with open('credentials.json', 'r') as file:
@@ -135,11 +170,16 @@ def read_credentials():
 """
     function that sets up the signal handler for sigint, 
     reads in credentials, and sets up loggers
+    params:
+        None
+    returns:
+        start_time (float) - time that program was initialized
+        recent_trades (RecentTrades) - in memory container of recent trades
 """
-#TODO: update comments
 def init():
-    curses.curs_set(0)
     signal.signal(signal.SIGINT, on_sigint)
+    curses.curs_set(0)
+    start_time = time.time()
     read_credentials()
     
     if not os.path.exists(LOG_PATH): os.mkdir(LOG_PATH)
@@ -149,16 +189,19 @@ def init():
     recent_trades = RecentTrades()
     recent_trades.add_tracker('15 Min', FIFTEEN_MIN)
     recent_trades.add_tracker('1 Hour', ONE_HOUR)
-    return recent_trades    
+    return start_time, recent_trades    
 
 """
     function where main loop is held, calls init and creates the client
     wrapped in curses wrapper for output
+    params:
+        stdscr (Window) - curses screen to add text to
+    returns:
+        NoneType
 """
 def main(stdscr):
-    start_time = time.time()
-    recent_trades = init()
-    client = Client(recent_trades)
+    start_time, recent_trades = init()
+    client = Client(recent_trades, CREDENTIALS['bitstamp']['pusher'])
     start_notification = False
     
     while True:
@@ -172,4 +215,5 @@ def main(stdscr):
         
         time.sleep(1)
 
+# run main with curses wrapper
 if __name__ == '__main__': curses.wrapper(main)
